@@ -58,7 +58,7 @@ def fetch_page_info(url: str):
         status_candidates.extend(strings[updated_idx + 1: updated_idx + 6])
     status_candidates.extend(strings)  # 兜底再全局扫
 
-    # 常见状态文字
+    # 常见状态文字，加上“その他”
     status_words = ["平常運転", "遅延", "運転見合わせ", "運休", "ダイヤ乱れ", "その他"]
     for s in status_candidates:
         text = s.strip()
@@ -164,7 +164,13 @@ def build_grouped_message(results):
 
     - key = (status, reason, delay_minutes)
     - 完全相同的一组线路合并成一块，第一行是【线路名1 / 线路名2 / ...】
-    
+
+    例如：
+    4 段都是 平常運転 + 无原因 + 无延迟 → 一块：
+      【常磐線(快速)… / 常磐線(各停)… / …】
+       状態：平常運転
+       更新：xx月xx日 xx時xx分更新
+
     有两种不同状态时，就分两块显示。
     """
     groups = {}
