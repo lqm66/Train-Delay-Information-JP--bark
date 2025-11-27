@@ -28,102 +28,88 @@ ICON_WARN = "https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x
 ICON_ERROR = "https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/274c.png" # ❌
 
 
-def fetch_page_info(url: str):
+def fetch_page_info(name: str, url: str):
     """
     从 Yahoo diainfo 页面解析：
-    - updated: '11月27日 15時47分更新'
+    - updated: 标题行后的那段（例如 '11月27日 15時47分更新'）
     - status:  '平常運転' / '遅延' / '運転見合わせ' / 'その他' 等
     - detail_text: 状態行下面的一段说明，用来抽取原因
     """
     resp = requests.get(url, timeout=10)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
-    strings = list(soup.stripped_strings)
+
+    # 所有文本碎片
+    strings = [s.strip() for s in soup.stripped_strings if s.strip()]
 
     updated = "更新時刻不明"
     status = "状態不明"
     updated_idx = None
+    title_idx = None
 
-    # ① 优先：找“以 更新 结尾的行”（排除「掲載」）
-    for i, s in enumerate(strings):
-        t = s.strip()
-        if t.endswith("更新") and "掲載" not in t:
-            updated = t
-            updated_idx = i
+    # 1) 先用“线路标题”找位置
+    for i, t in enumerate(strings):
+        if name in t:
+            title_idx = i
+            # 情况 A: 同一字符串里既有标题又有时间（例：'常磐線… 11月27日 15時47分更新'）
+            after = t.replace(name, "").strip()
+            if after:
+                updated = after
+                updated_idx = i
+            # 情况 B: 这一项只有标题，更新时间在后一个元素
+            elif i + 1 < len(strings):
+                updated = strings[i + 1].strip()
+                updated_idx = i + 1
             break
 
-    # ② 如果没找到，再找“11月27日 15時47分”这种，只含日期时间没写“更新”的行
+    # 2) 如果上面没成功，再找“以 更新 结尾”的行（排除「掲載」）
+    if updated_idx is None:
+        for i, t in enumerate(strings):
+            if t.endswith("更新") and "掲載" not in t:
+                updated = t
+                updated_idx = i
+                break
+
+    # 3) 还不行，用“xx月xx日 xx時xx分”兜底
     if updated_idx is None:
         dt_pattern = re.compile(r"\d{1,2}月\d{1,2}日\s+\d{1,2}時\d{1,2}分")
-        for i, s in enumerate(strings):
-            t = s.strip()
+        for i, t in enumerate(strings):
             if dt_pattern.search(t):
                 updated = t + "更新"
                 updated_idx = i
                 break
 
-    # 状态候选：优先在“更新”后面的几行找短字符串
+    # 4) 状態：优先在 updated 之后几行里找短字符串
     status_candidates = []
     if updated_idx is not None:
-        status_candidates.extend(strings[updated_idx + 1: updated_idx + 6])
+        status_candidates.extend(strings[updated_idx + 1 : updated_idx + 6])
+    elif title_idx is not None:
+        status_candidates.extend(strings[title_idx + 1 : title_idx + 6])
     status_candidates.extend(strings)  # 兜底再全局扫
 
     status_words = ["平常運転", "遅延", "運転見合わせ", "運休", "ダイヤ乱れ", "その他"]
-    for s in status_candidates:
-        text = s.strip()
-        if len(text) <= 10 and any(w == text or w in text for w in status_words):
-            status = text
+    for t in status_candidates:
+        if len(t) <= 10 and any(w == t or w in t for w in status_words):
+            status = t
             break
 
-    # 详细文本：从状态行下面开始抓几行，用于提取“红字说明”
+    # 5) 详细文本：从状态行下面开始抓几行
     detail_start = 0
     if status != "状態不明":
         try:
             idx = strings.index(status)
             detail_start = idx + 1
         except ValueError:
-            detail_start = (updated_idx + 1) if updated_idx is not None else 0
+            if updated_idx is not None:
+                detail_start = updated_idx + 1
+            elif title_idx is not None:
+                detail_start = title_idx + 1
     elif updated_idx is not None:
         detail_start = updated_idx + 1
+    elif title_idx is not None:
+        detail_start = title_idx + 1
 
-    detail_text = " ".join(strings[detail_start: detail_start + 30])
-    return updated, status, detail_text
-
-
-    # ✅ 更新时间：只要某一行以「更新」结尾就算（排除“掲載”）
-    for i, s in enumerate(strings):
-        t = s.strip()
-        if t.endswith("更新") and "掲載" not in t:
-            updated = t
-            updated_idx = i
-            break
-
-    # 状态候选：优先在“更新”后面的几行找短字符串
-    status_candidates = []
-    if updated_idx is not None:
-        status_candidates.extend(strings[updated_idx + 1: updated_idx + 6])
-    status_candidates.extend(strings)  # 兜底再全局扫
-
-    # 常见状态文字，加上“その他”
-    status_words = ["平常運転", "遅延", "運転見合わせ", "運休", "ダイヤ乱れ", "その他"]
-    for s in status_candidates:
-        text = s.strip()
-        if len(text) <= 10 and any(w == text or w in text for w in status_words):
-            status = text
-            break
-
-    # 详细文本：从状态行下面开始抓几行，用于提取“红字说明”
-    detail_start = 0
-    if status != "状態不明":
-        try:
-            idx = strings.index(status)
-            detail_start = idx + 1
-        except ValueError:
-            detail_start = (updated_idx + 1) if updated_idx is not None else 0
-    elif updated_idx is not None:
-        detail_start = updated_idx + 1
-
-    detail_text = " ".join(strings[detail_start: detail_start + 30])
+    detail_text = " ".join(strings[detail_start : detail_start + 30])
     return updated, status, detail_text
 
 
@@ -161,7 +147,7 @@ def extract_reason_and_delay(detail_text: str, status: str):
         if kw in detail_text:
             idx = detail_text.index(kw)
             start = max(0, idx - 20)
-            snippet = detail_text[start: idx + len(kw) + 40]
+            snippet = detail_text[start : idx + len(kw) + 40]
             reason_text = snippet.strip()
             break
 
@@ -180,7 +166,7 @@ def collect_all_lines():
     results = []
     for name, url in LINES:
         try:
-            updated, status, detail = fetch_page_info(url)
+            updated, status, detail = fetch_page_info(name, url)
             reason, delay_minutes = extract_reason_and_delay(detail, status)
             results.append(
                 {
@@ -206,12 +192,12 @@ def collect_all_lines():
 
 def build_grouped_message(results):
     """
-    合并规则（就是你刚刚说的那种）：
+    合并规则：
 
     - key = (status, reason, delay_minutes)
     - 完全相同的一组线路合并成一块，第一行是【线路名1 / 线路名2 / ...】
 
-    例如：
+    例：
     4 段都是 平常運転 + 无原因 + 无延迟 → 一块：
       【常磐線(快速)… / 常磐線(各停)… / …】
        状態：平常運転
@@ -229,7 +215,7 @@ def build_grouped_message(results):
     has_severe = False
 
     for (status, reason, delay_minutes), items in groups.items():
-        # 第一行标题：把一组里的所有线路名串起来
+        # 标题：一组里的所有线路名
         names = " / ".join(i["name"] for i in items)
         updated = items[0]["updated"]
 
@@ -245,7 +231,6 @@ def build_grouped_message(results):
         if any(x in status for x in ["運転見合わせ", "運休", "脱線"]):
             has_severe = True
 
-        # 平常運転时不会有 reason/delay（在 extract 里已经控制），这里再简单判断一下
         if reason and "情報取得エラー" not in status:
             block_lines.append(f"原因：{reason}")
         if delay_minutes and "情報取得エラー" not in status:
@@ -285,7 +270,7 @@ def main():
     title = "常磐線運行情報"
     icon = choose_icon(has_abnormal, has_severe)
 
-    # 想只在有异常时推送的话改成：
+    # 想只在有异常时推送的话可以改成：
     # if has_abnormal:
     #     send_bark(title, body, icon)
     # else:
@@ -295,4 +280,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
