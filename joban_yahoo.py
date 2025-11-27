@@ -44,6 +44,52 @@ def fetch_page_info(url: str):
     status = "状態不明"
     updated_idx = None
 
+    # ① 优先：找“以 更新 结尾的行”（排除「掲載」）
+    for i, s in enumerate(strings):
+        t = s.strip()
+        if t.endswith("更新") and "掲載" not in t:
+            updated = t
+            updated_idx = i
+            break
+
+    # ② 如果没找到，再找“11月27日 15時47分”这种，只含日期时间没写“更新”的行
+    if updated_idx is None:
+        dt_pattern = re.compile(r"\d{1,2}月\d{1,2}日\s+\d{1,2}時\d{1,2}分")
+        for i, s in enumerate(strings):
+            t = s.strip()
+            if dt_pattern.search(t):
+                updated = t + "更新"
+                updated_idx = i
+                break
+
+    # 状态候选：优先在“更新”后面的几行找短字符串
+    status_candidates = []
+    if updated_idx is not None:
+        status_candidates.extend(strings[updated_idx + 1: updated_idx + 6])
+    status_candidates.extend(strings)  # 兜底再全局扫
+
+    status_words = ["平常運転", "遅延", "運転見合わせ", "運休", "ダイヤ乱れ", "その他"]
+    for s in status_candidates:
+        text = s.strip()
+        if len(text) <= 10 and any(w == text or w in text for w in status_words):
+            status = text
+            break
+
+    # 详细文本：从状态行下面开始抓几行，用于提取“红字说明”
+    detail_start = 0
+    if status != "状態不明":
+        try:
+            idx = strings.index(status)
+            detail_start = idx + 1
+        except ValueError:
+            detail_start = (updated_idx + 1) if updated_idx is not None else 0
+    elif updated_idx is not None:
+        detail_start = updated_idx + 1
+
+    detail_text = " ".join(strings[detail_start: detail_start + 30])
+    return updated, status, detail_text
+
+
     # ✅ 更新时间：只要某一行以「更新」结尾就算（排除“掲載”）
     for i, s in enumerate(strings):
         t = s.strip()
@@ -249,3 +295,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
