@@ -1,0 +1,33 @@
+name: Joban Line Bark Push
+
+on:
+  schedule:
+    # 注意：GitHub 用的是 UTC
+    # 日本時間 06:40 = 前一天 21:40 UTC
+    # 日本時間 16:40 = 当天 07:40 UTC
+    - cron: "40 21 * * *"
+    - cron: "40 7 * * *"
+  workflow_dispatch:  # 手动触发（测试用）
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install requests beautifulsoup4
+
+      - name: Run Joban script
+        env:
+          BARK_KEY: ${{ secrets.BARK_KEY }}
+        run: |
+          python joban_yahoo.py
