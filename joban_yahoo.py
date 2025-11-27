@@ -4,7 +4,7 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import quote
 
-# JR 常磐線 4 区间（你前面整理的那四个）
+# JR 常磐線 4 区间
 LINES = [
     ("常磐線(快速)[品川～取手]", "https://transit.yahoo.co.jp/diainfo/57/0"),
     ("常磐線(各停)",             "https://transit.yahoo.co.jp/diainfo/58/0"),
@@ -12,7 +12,6 @@ LINES = [
     ("常磐線[水戸～いわき]",     "https://transit.yahoo.co.jp/diainfo/59/60"),
 ]
 
-# 一些常见的原因关键词（简单提取一下“为什么延迟”）
 REASON_KEYWORDS = [
     "人身事故", "車両故障", "車両点検", "信号トラブル", "信号関係の故障",
     "踏切内での事故", "踏切での事故", "線路内立ち入り", "線路内への立ち入り",
@@ -20,17 +19,17 @@ REASON_KEYWORDS = [
 ]
 
 # Twemoji 图标（emoji 风 PNG）
-ICON_OK = "https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/2705.png"  # ✅
+ICON_OK = "https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/2705.png"   # ✅
 ICON_WARN = "https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/26a0.png"  # ⚠
-ICON_ERROR = "https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/274c.png"  # ❌
+ICON_ERROR = "https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/274c.png" # ❌
 
 
 def fetch_page_info(url: str):
     """
     从 Yahoo diainfo 页面解析：
-    - 更新时刻（字符串）
+    - 更新时刻
     - 状态（平常運転/遅延/運転見合わせ…）
-    - detail_text（用来提取原因和延迟）
+    - detail_text（后续用来提取原因和延迟）
     """
     resp = requests.get(url, timeout=10)
     resp.raise_for_status()
@@ -39,36 +38,39 @@ def fetch_page_info(url: str):
 
     updated = "更新時刻不明"
     status = "状態不明"
-    detail_text = ""
 
-    idx = None
-    for i, s in enumerate(strings):
-        if s.endswith("更新"):
+    # 更宽松地找“xx月xx日 xx時xx分 更新”
+    for s in strings:
+        if "更新" in s and "時" in s and re.search(r"更新$", s):
             updated = s
-            idx = i
             break
 
-    if idx is not None:
-        if idx + 1 < len(strings):
-            status = strings[idx + 1]
-        detail_candidates = strings[idx + 2: idx + 12]
-        detail_text = " ".join(detail_candidates)
-    else:
-        detail_text = " ".join(strings)
+    # 更宽松地找状态：平常運転 / 遅延 / 運転見合わせ / 運休 / ダイヤ乱れ 等
+    for s in strings:
+        if len(s) <= 10 and any(
+            kw in s for kw in ["平常運転", "遅延", "運転見合わせ", "運休", "ダイヤ乱れ"]
+        ):
+            status = s
+            break
 
+    # 详细文本：从“更新”那行之后开始，多抓几行
+    detail_start = 0
+    if updated != "更新時刻不明":
+        try:
+            idx = strings.index(updated)
+            detail_start = idx + 1
+        except ValueError:
+            pass
+
+    detail_text = " ".join(strings[detail_start: detail_start + 20])
     return updated, status, detail_text
 
 
 def extract_reason_and_delay(detail_text: str):
-    """
-    从 detail 文本中尽量提取：
-    - reason_text: 例如“○○駅での人身事故”
-    - delay_minutes: int 或 None
-    """
+    """从 detail 文本中尽量提取原因和大致延迟分钟数"""
     reason_text = None
     delay_minutes = None
 
-    # 提取“20分遅れ”“20分程度の遅れ”等
     m = re.search(r"(\d+)\s*分(?:程度|前後)?(?:の)?遅れ", detail_text)
     if m:
         try:
@@ -76,7 +78,6 @@ def extract_reason_and_delay(detail_text: str):
         except ValueError:
             delay_minutes = None
 
-    # 提取原因关键词
     for kw in REASON_KEYWORDS:
         if kw in detail_text:
             idx = detail_text.index(kw)
@@ -85,7 +86,6 @@ def extract_reason_and_delay(detail_text: str):
             reason_text = snippet.strip()
             break
 
-    # 如果完全没有关键词，但有文本，就截一小段当原因
     if reason_text is None and detail_text:
         sentence_end = re.search(r"[。！!？?]", detail_text)
         if sentence_end:
@@ -97,19 +97,6 @@ def extract_reason_and_delay(detail_text: str):
 
 
 def collect_all_lines():
-    """
-    返回每一段线区的解析结果列表：
-    [
-      {
-        "name": "常磐線(快速)[品川～取手]",
-        "updated": "... 更新",
-        "status": "遅延",
-        "reason": "...",
-        "delay_minutes": 20
-      },
-      ...
-    ]
-    """
     results = []
     for name, url in LINES:
         try:
@@ -136,12 +123,7 @@ def collect_all_lines():
 def build_grouped_message(results):
     """
     按 (status, reason, delay_minutes) 分组：
-    - 完全一样的就合并显示线名，避免四条内容重复
-
-    返回：
-    - has_abnormal: 是否存在非“平常運転”状态
-    - has_severe: 是否存在“運転見合わせ / 運休”等严重状态
-    - body_text: 发送到 Bark 的正文
+    - 完全一样的分一组显示，避免四条重复
     """
     groups = {}
     for r in results:
@@ -160,13 +142,11 @@ def build_grouped_message(results):
 
         if "平常運転" not in status and "情報取得エラー" not in status:
             has_abnormal = True
-
         if any(x in status for x in ["運転見合わせ", "運休", "運転を見合わせ"]):
             has_severe = True
 
         if reason and "情報取得エラー" not in status:
             block_lines.append(f"原因：{reason}")
-
         if delay_minutes and "情報取得エラー" not in status:
             block_lines.append(f"遅延：最大およそ{delay_minutes}分")
 
@@ -177,12 +157,7 @@ def build_grouped_message(results):
 
 
 def choose_icon(has_abnormal: bool, has_severe: bool) -> str:
-    """
-    根据整体情况选图标：
-    - 全部平常運転 → ✅
-    - 有异常但无严重停运 → ⚠
-    - 有運転見合わせ / 運休 → ❌
-    """
+    """根据整体情况选图标：✅ / ⚠ / ❌"""
     if not has_abnormal:
         return ICON_OK
     if has_severe:
@@ -195,30 +170,19 @@ def send_bark(title: str, body: str, icon_url: str | None = None):
     if not bark_key:
         raise RuntimeError("環境変数 BARK_KEY が設定されていません。GitHub Secrets に BARK_KEY を設定してください。")
 
-    # Path 中的日文标题 & 正文要 URL 编码
     base = f"https://api.day.app/{bark_key}/{quote(title)}/{quote(body)}"
     if icon_url:
-        # icon 是 URL，需要保留 :/ 不被转义
         base = base + "?icon=" + quote(icon_url, safe=":/")
-
     requests.get(base, timeout=10)
 
 
 def main():
     results = collect_all_lines()
     has_abnormal, has_severe, body = build_grouped_message(results)
-
-    # 标题可按需改，比如加「朝」「夕」
     title = "常磐線運行情報"
-
     icon = choose_icon(has_abnormal, has_severe)
 
-    # 你可以选择：
-    # 1）只在有异常时推送，在 GitHub Actions 里跑脚本不会白吵你：
-    # if has_abnormal:
-    #     send_bark(title, body, icon)
-
-    # 2）无论是否异常都推送（早晚电车日报）：
+    # 想只在有异常时推送就把下面两行改成 if has_abnormal: send_bark(...)
     send_bark(title, body, icon)
 
 
