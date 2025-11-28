@@ -6,7 +6,7 @@ from urllib.parse import quote
 
 # 監控的 4 段常磐線
 LINES = [
-    ("常磐線(快速)[品川～取手]", "https://transit.yahoo.co.jp/diainfo/57/0"),
+    ("常磐線(快速)[品川～取手]", "https://transit.yahoo.co.jp/diainfo/27/0"),
     ("常磐線(各停)",             "https://transit.yahoo.co.jp/diainfo/58/0"),
     ("常磐線[品川～水戸]",       "https://transit.yahoo.co.jp/diainfo/59/59"),
     ("常磐線[水戸～いわき]",     "https://transit.yahoo.co.jp/diainfo/59/60"),
@@ -249,3 +249,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
