@@ -156,14 +156,24 @@ def collect_all_lines():
 
 
 def build_grouped_message(results):
-    ...
+    # 1. 先按 (status, reason) 分组
+    groups = {}
+    for r in results:
+        key = (r["status"], r["reason"] or "")
+        groups.setdefault(key, []).append(r)
+
+    has_abnormal = False
+    has_severe = False
+    blocks = []
+
+    # 2. 每个分组生成一段文本
     for (status, reason), items in groups.items():
-        names = " / ".join(i["name"] for i in items)
+        names = " / ".join(i["name"] for i in items)   # = 四条里对应的「第19/21行标题」
         updated = items[0]["updated"]
 
-        # 把原来的 f"" 改成真正的标题行
+        # 这里改掉：第一行就是你要的合并标题
         lines = [
-            f"",
+            f"【{names}】",
             f"状態：{status}",
             f"更新：{updated}",
         ]
@@ -173,6 +183,7 @@ def build_grouped_message(results):
         if any(w in status for w in ["運転見合わせ", "運休", "脱線"]):
             has_severe = True
 
+        # 非平常運転才加原因
         if reason and "情報取得エラー" not in status:
             lines.append(f"原因：{reason}")
 
@@ -180,6 +191,7 @@ def build_grouped_message(results):
 
     body = "\n\n".join(blocks)
     return has_abnormal, has_severe, body
+
 
 
 def choose_icon(has_abnormal: bool, has_severe: bool) -> str:
