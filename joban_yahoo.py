@@ -4,7 +4,7 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import quote
 
-# 监控的 4 段常磐線（名字写死在这，方便合并&显示）
+# 监控的 4 段常磐線（名字写死在这里，方便合并&显示）
 LINES = [
     ("常磐線(快速)[品川～取手]", "https://transit.yahoo.co.jp/diainfo/57/0"),
     ("常磐線(各停)",             "https://transit.yahoo.co.jp/diainfo/58/0"),
@@ -25,7 +25,7 @@ ICON_WARN = "https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x
 ICON_ERR  = "https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x72/274c.png"  # ❌
 
 
-def pick_title_index(name: str, strings: list[str]) -> int | None:
+def pick_title_index(name, strings):
     """
     在所有等于 name 的行中，找到“下一行是日期”的那个索引。
     例：
@@ -43,17 +43,11 @@ def pick_title_index(name: str, strings: list[str]) -> int | None:
     return candidates[0] if candidates else None
 
 
-def fetch_page_info(name: str, url: str):
+def fetch_page_info(name, url):
     """
-    解析单一路線的信息，按你说的行号定义：
-
-    - 更新：标题下一行(日期) + 再下一行的“更新”
-    - 状態：标题后面往下扫，取第一个是
-           平常運転 / 遅延 / 運転状況 / 列車遅延 / 運転見合わせ / 運休 / ダイヤ乱れ / その他
-           的那一行
-    - 原因：只有非「平常運転」时，从状态下一两行开始取，
-           一直到“迂回ルート検索 / 路線を登録 / ツイート / …に関するつぶやき”等为止。
-           相当于 26 + 27 行拼起来。
+    - 更新：标题下一行(日期) + 再下一行“更新”
+    - 状態：标题后面往下扫，取第一个是状态词的那一行
+    - 原因：只有非「平常運転」时，从状态下一两行开始取直到“迂回ルート検索/路線を登録…”为止
     """
     resp = requests.get(url, headers=HEADERS, timeout=10)
     resp.raise_for_status()
@@ -70,7 +64,7 @@ def fetch_page_info(name: str, url: str):
 
     # 2) 更新：22 行日期 + 23 行“更新”
     if title_idx is not None and title_idx + 1 < len(strings):
-        updated = strings[title_idx + 1]  # 日期时间
+        updated = strings[title_idx + 1]
         if title_idx + 2 < len(strings) and "更新" in strings[title_idx + 2]:
             updated += strings[title_idx + 2]
         elif "更新" not in updated:
@@ -97,12 +91,12 @@ def fetch_page_info(name: str, url: str):
 
     for j in search_range:
         t = strings[j]
-        if t in status_words:   # 只匹配纯状态文字，避免假名那行
+        if t in status_words:   # 避免匹配到假名那行
             status = t
             status_idx = j
             break
 
-    # 4) 原因：只有非平常運転时才取 26 & 27 行那类内容
+    # 4) 原因：只有非平常運転时才取
     if status_idx is not None and "平常運転" not in status:
         stop_words = [
             "迂回ルート検索",
@@ -133,7 +127,7 @@ def collect_all_lines():
             updated, status, reason = fetch_page_info(name, url)
             results.append(
                 {
-                    "name": name,       # 这里就当成“标题用的名称”
+                    "name": name,       # 用作“路線名”
                     "updated": updated,
                     "status": status,
                     "reason": reason,
@@ -154,18 +148,15 @@ def collect_all_lines():
 def build_grouped_message(results):
     """
     合并逻辑：
+      key = (status, reason_text)
 
-    - key = (status, reason_text)
-    - 完全一样的一组线路合并成一块
-
-    输出格式改成：
-
-      路線：常磐線(快速)[品川～取手] / 常磐線(各停) / …
+    输出格式：
+      路線：常磐線(快速)… / 常磐線(各停) / …
       状態：平常運転 / 列車遅延 / …
       更新：11月28日 9時52分更新
       原因：……（有事故时才有）
     """
-    groups: dict[tuple, list] = {}
+    groups = {}
     for r in results:
         key = (r["status"] or "", r["reason"] or "")
         groups.setdefault(key, []).append(r)
@@ -178,7 +169,6 @@ def build_grouped_message(results):
         names = " / ".join(i["name"] for i in items)
         updated = items[0]["updated"]
 
-        # ✅ 这里直接把标题写在“路線：……”这一行里
         lines = [
             f"路線：{names}",
             f"状態：{status}",
@@ -199,7 +189,7 @@ def build_grouped_message(results):
     return has_abnormal, has_severe, body
 
 
-def choose_icon(has_abnormal: bool, has_severe: bool) -> str:
+def choose_icon(has_abnormal, has_severe):
     if not has_abnormal:
         return ICON_OK
     if has_severe:
@@ -207,7 +197,7 @@ def choose_icon(has_abnormal: bool, has_severe: bool) -> str:
     return ICON_WARN
 
 
-def send_bark(title: str, body: str, icon_url: str | None = None):
+def send_bark(title, body, icon_url=None):
     bark_key = os.environ.get("BARK_KEY")
     if not bark_key:
         raise RuntimeError("環境変数 BARK_KEY が設定されていません。")
@@ -215,6 +205,9 @@ def send_bark(title: str, body: str, icon_url: str | None = None):
     url = f"https://api.day.app/{bark_key}/{quote(title)}/{quote(body)}"
     if icon_url:
         url += "?icon=" + quote(icon_url, safe=":/")
+
+    # 在 GitHub Actions 日志里也打印一下，方便以后 debug
+    print("Bark URL:", url)
     requests.get(url, timeout=10)
 
 
@@ -228,4 +221,14 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        # 万一脚本报错，也给你推一条错误通知
+        try:
+            err_msg = f"スクリプトエラー: {repr(e)}"
+            print(err_msg)
+            send_bark("常磐線運行情報（エラー）", err_msg, ICON_ERR)
+        except Exception as _:
+            # 如果连 Bark 都发不出去，只能让 Actions 变红了
+            raise
