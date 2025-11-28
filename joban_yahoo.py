@@ -156,30 +156,8 @@ def collect_all_lines():
 
 
 def build_grouped_message(results):
-    """
-    分组规则：
-
-    key = (status, reason_text)
-    - 四条都“平常運転 & 无原因” → 合并成一块：
-
-      【常磐線(快速)… / 常磐線(各停) / 常磐線[品川～水戸] / 常磐線[水戸～いわき]】
-      状態：平常運転
-      更新：……
-
-    - 如果某两条是“人身事故 遅延”，另两条“強風 ダイヤ乱れ”，就分两块，
-      每块里标题是对应的几条线。
-    """
-    groups = {}
-    for r in results:
-        key = (r["status"] or "", r["reason"] or "")
-        groups.setdefault(key, []).append(r)
-
-    blocks = []
-    has_abnormal = False
-    has_severe = False
-
+    ...
     for (status, reason), items in groups.items():
-        # 这里 names 就是这一组里所有路線名，1～4 个不等
         names = " / ".join(i["name"] for i in items)
         updated = items[0]["updated"]
 
