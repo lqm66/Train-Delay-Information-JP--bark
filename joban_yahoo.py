@@ -191,15 +191,48 @@ def send_bark(title: str, body: str, icon_url: str | None = None):
     if not bark_key:
         raise RuntimeError("環境変数 BARK_KEY が設定されていません。")
 
-    # Bark URL 格式：https://api.day.app/{key}/{title}/{body}
-    url = f"https://api.day.app/{bark_key}/{quote(title)}/{quote(body)}"
-    if icon_url:
-        url += "?icon=" + quote(icon_url, safe=":/")
+    # 清理 bark_key，移除可能的空格或换行
+    bark_key = bark_key.strip()
     
-    print(f"Sending to Bark:\nTitle: {title}\nBody:\n{body}\n")
-    resp = requests.get(url, timeout=10)
-    resp.raise_for_status()
-    print(f"Bark response: {resp.status_code}")
+    # Bark URL 格式：https://api.day.app/{key}/{title}/{body}
+    # 使用 POST 方法更可靠
+    url = f"https://api.day.app/{bark_key}"
+    
+    payload = {
+        "title": title,
+        "body": body,
+        "icon": icon_url if icon_url else ""
+    }
+    
+    print(f"Sending to Bark...")
+    print(f"Title: {title}")
+    print(f"Body preview: {body[:100]}...")
+    print(f"URL: {url}")
+    
+    try:
+        resp = requests.post(url, json=payload, timeout=10)
+        resp.raise_for_status()
+        print(f"✓ Bark 推送成功！ (status: {resp.status_code})")
+        return True
+    except requests.exceptions.HTTPError as e:
+        print(f"✗ Bark 推送失败: {e}")
+        print(f"Response: {resp.text if resp else 'No response'}")
+        # 尝试 GET 方法作为备选
+        print("嘗試使用 GET 方法...")
+        try:
+            url_get = f"https://api.day.app/{bark_key}/{quote(title)}/{quote(body)}"
+            if icon_url:
+                url_get += f"?icon={quote(icon_url, safe=':/')}"
+            resp = requests.get(url_get, timeout=10)
+            resp.raise_for_status()
+            print(f"✓ Bark 推送成功 (GET方法)！")
+            return True
+        except Exception as e2:
+            print(f"✗ GET 方法也失败: {e2}")
+            raise
+    except Exception as e:
+        print(f"✗ 网络错误: {e}")
+        raise
 
 
 def main():
