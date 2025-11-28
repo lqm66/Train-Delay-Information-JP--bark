@@ -82,19 +82,20 @@ def fetch_page_info(name: str, url: str):
                 updated = t + "更新"
                 break
 
-    # ---------- 3. 状态：在全文里找第一个“看起来像状态”的词 ----------
+    # ---------- 3. 状態：标题后面往下扫 ----------
     status_words = [
-        "平常運転",
-        "遅延",
-        "列車遅延",
-        "運転状況",
-        "一部運休",
-        "運転見合わせ",
-        "運転再開",
-        "ダイヤ乱れ",
+        "平常運転", "遅延", "運転見合わせ", "運休",
+        "ダイヤ乱れ", "運転状況", "列車遅延", "その他",
     ]
     status_idx = None
-    for j, t in enumerate(strings):
+    if title_idx is not None:
+        search_range = range(title_idx + 1, min(title_idx + 15, len(strings)))
+    else:
+        search_range = range(len(strings))
+
+    for j in search_range:
+        t = strings[j]
+        # 这里用“==”，只匹配纯状态文字，避免匹配到假名那行
         if t in status_words:
             status = t
             status_idx = j
@@ -109,7 +110,6 @@ def fetch_page_info(name: str, url: str):
             "に関するつぶやき",
             "ツイート",
         ]
-
         detail_lines = []
         for j in range(status_idx + 1, min(status_idx + 10, len(strings))):
             t = strings[j]
@@ -163,7 +163,7 @@ def build_grouped_message(results):
         has_severe  : 是否存在 見合わせ / 運休 / 脱線 等严重状态
         body        : 文本正文（不含最上面的「常磐線運行情報」标题）
     """
-    # 1. 按 (status, reason) 分组，方便合并标题
+    # 1. 按 (status, reason) 分组，方便“相同内容合并”
     groups = {}
     for r in results:
         key = (r["status"], r["reason"] or "")
@@ -179,28 +179,28 @@ def build_grouped_message(results):
     #   更新：...
     #   原因：...（只有非平常運転时才出现）
     for (status, reason), items in groups.items():
-        # 合并同组内所有路線名（对应你 debug 里说的「第19行标题」）
+        # 合并同组内所有路線名
         names = " / ".join(i["name"] for i in items)
-        # 更新时间就拿这一组中的第一条
+        # 更新时间：用这一组里的第一条
         updated = items[0]["updated"]
 
-        # 这里不再用空行，而是直接放合并标题
+        # ★ 关键改动：第一行不再是空字符串，而是合并后的标题
         lines = [
             f"【{names}】",
             f"状態：{status}",
             f"更新：{updated}",
         ]
 
-        # 只要出现了非平常運転（且不是抓取错误），就认为有异常
+        # 只要有非平常運転（且不是情報取得エラー），就标记有异常
         if "平常運転" not in status and "情報取得エラー" not in status:
             has_abnormal = True
 
-        # 严重状态，用来切换图标
-        if any(word in status for word in ["運転見合わせ", "運休", "脱線"]):
+        # 严重状态（用来切换图标）
+        if ("運転見合わせ" in status) or ("運休" in status) or ("脱線" in status):
             has_severe = True
 
-        # 非平常運転才追加原因；情報取得エラー就算了
-        if reason and "情報取得エラー" not in status:
+        # 非平常運転才加原因；情報取得エラー不需要
+        if reason and "情報取得エラー" not in status and "平常運転" not in status:
             lines.append(f"原因：{reason}")
 
         blocks.append("\n".join(lines))
@@ -208,6 +208,8 @@ def build_grouped_message(results):
     # 各块之间空一行
     body = "\n\n".join(blocks)
     return has_abnormal, has_severe, body
+
+
 
 
 def choose_icon(has_abnormal: bool, has_severe: bool) -> str:
