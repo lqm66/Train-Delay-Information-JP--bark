@@ -4,9 +4,9 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import quote
 
-# 监控的 4 段常磐線（标题写死在这里，方便合并）
+# 监控的 4 段常磐線（名字写死在这，方便合并&显示）
 LINES = [
-    ("常磐線(快速)[品川～取手]", "https://transit.yahoo.co.jp/diainfo/22/0"),
+    ("常磐線(快速)[品川～取手]", "https://transit.yahoo.co.jp/diainfo/57/0"),
     ("常磐線(各停)",             "https://transit.yahoo.co.jp/diainfo/58/0"),
     ("常磐線[品川～水戸]",       "https://transit.yahoo.co.jp/diainfo/59/59"),
     ("常磐線[水戸～いわき]",     "https://transit.yahoo.co.jp/diainfo/59/60"),
@@ -28,30 +28,32 @@ ICON_ERR  = "https://raw.githubusercontent.com/twitter/twemoji/master/assets/72x
 def pick_title_index(name: str, strings: list[str]) -> int | None:
     """
     在所有等于 name 的行中，找到“下一行是日期”的那个索引。
-    例如:
-    [19] 常磐線(快速)[品川～取手]   ← 面包屑
-    [20] じょうばんせん(かいそく)[しながわ～とりで]
-    [21] 常磐線(快速)[品川～取手]   ← 正文标题
-    [22] 11月28日 8時59分
-    [23] 更新
+    例：
+      [19] 常磐線(快速)[品川～取手]         ← 面包屑
+      [20] じょうばんせん(かいそく)…
+      [21] 常磐線(快速)[品川～取手]         ← 正文标题
+      [22] 11月28日 8時59分
+      [23] 更新
     """
     date_re = re.compile(r"\d{1,2}月\d{1,2}日\s+\d{1,2}時\d{1,2}分")
     candidates = [i for i, t in enumerate(strings) if t == name]
     for i in candidates:
         if i + 1 < len(strings) and date_re.fullmatch(strings[i + 1]):
             return i
-    # 兜底：如果没有符合“后面是日期”的，就用第一处
     return candidates[0] if candidates else None
 
 
 def fetch_page_info(name: str, url: str):
     """
-    根据你提供的行号定义：
+    解析单一路線的信息，按你说的行号定义：
 
-    - 标题：固定用 name（合并时用）
-    - 更新：22 行日期 + 23 行“更新” → 由 title_idx 推出来
-    - 状態：25 行（平常運転 / 遅延 / 運転状況 / 列車遅延 等）
-    - 原因：有事故时，26 行 + 27 行的说明；平常運転则为 None
+    - 更新：标题下一行(日期) + 再下一行的“更新”
+    - 状態：标题后面往下扫，取第一个是
+           平常運転 / 遅延 / 運転状況 / 列車遅延 / 運転見合わせ / 運休 / ダイヤ乱れ / その他
+           的那一行
+    - 原因：只有非「平常運転」时，从状态下一两行开始取，
+           一直到“迂回ルート検索 / 路線を登録 / ツイート / …に関するつぶやき”等为止。
+           相当于 26 + 27 行拼起来。
     """
     resp = requests.get(url, headers=HEADERS, timeout=10)
     resp.raise_for_status()
@@ -63,18 +65,18 @@ def fetch_page_info(name: str, url: str):
     status = "状態不明"
     reason = None
 
-    # ---------- 1. 找“真正的标题行索引” ----------
+    # 1) 找真正标题行
     title_idx = pick_title_index(name, strings)
 
-    # ---------- 2. 更新时间：标题下一行 + “更新” ----------
+    # 2) 更新：22 行日期 + 23 行“更新”
     if title_idx is not None and title_idx + 1 < len(strings):
-        updated = strings[title_idx + 1]          # 22 行：11月xx日 xx時xx分
+        updated = strings[title_idx + 1]  # 日期时间
         if title_idx + 2 < len(strings) and "更新" in strings[title_idx + 2]:
-            updated += strings[title_idx + 2]     # 23 行：更新
+            updated += strings[title_idx + 2]
         elif "更新" not in updated:
             updated += "更新"
 
-    # 如果上面失败，再用“xx月xx日 xx時xx分”兜底
+    # 兜底：用 “xx月xx日 xx時xx分”
     if updated == "更新時刻不明":
         dt_re = re.compile(r"\d{1,2}月\d{1,2}日\s+\d{1,2}時\d{1,2}分")
         for t in strings:
@@ -82,7 +84,7 @@ def fetch_page_info(name: str, url: str):
                 updated = t + "更新"
                 break
 
-    # ---------- 3. 状態：标题后面往下扫 ----------
+    # 3) 状態：标题后面往下扫
     status_words = [
         "平常運転", "遅延", "運転見合わせ", "運休",
         "ダイヤ乱れ", "運転状況", "列車遅延", "その他",
@@ -95,13 +97,12 @@ def fetch_page_info(name: str, url: str):
 
     for j in search_range:
         t = strings[j]
-        # 这里用“==”，只匹配纯状态文字，避免匹配到假名那行
-        if t in status_words:
+        if t in status_words:   # 只匹配纯状态文字，避免假名那行
             status = t
             status_idx = j
             break
 
-    # ---------- 4. 原因：只有“非平常運転”时才抓 26/27 行 ----------
+    # 4) 原因：只有非平常運転时才取 26 & 27 行那类内容
     if status_idx is not None and "平常運転" not in status:
         stop_words = [
             "迂回ルート検索",
@@ -118,11 +119,6 @@ def fetch_page_info(name: str, url: str):
             detail_lines.append(t)
 
         if detail_lines:
-            # 典型情况：
-            # 25 行：状態（列車遅延）
-            # 26 行：红字原因
-            # 27 行：括号里的“（11月xx日 xx時xx分掲載）”
-            # 直接把 26+27 行拼起来
             reason_text = " ".join(detail_lines)
             if "事故･遅延に関する情報はありません" not in reason_text:
                 reason = reason_text
@@ -137,7 +133,7 @@ def collect_all_lines():
             updated, status, reason = fetch_page_info(name, url)
             results.append(
                 {
-                    "name": name,
+                    "name": name,       # 这里就当成“标题用的名称”
                     "updated": updated,
                     "status": status,
                     "reason": reason,
@@ -157,19 +153,19 @@ def collect_all_lines():
 
 def build_grouped_message(results):
     """
-    分组规则：
+    合并逻辑：
 
-    key = (status, reason_text)
-    - 四条都“平常運転 & 无原因” → 合并成一块：
+    - key = (status, reason_text)
+    - 完全一样的一组线路合并成一块
 
-      【常磐線(快速)… / 常磐線(各停) / 常磐線[品川～水戸] / 常磐線[水戸～いわき]】
-      状態：平常運転
-      更新：……
+    输出格式改成：
 
-    - 如果某两条是“人身事故 遅延”，另两条“強風 ダイヤ乱れ”，就分两块，
-      每块里标题是对应的几条线。
+      路線：常磐線(快速)[品川～取手] / 常磐線(各停) / …
+      状態：平常運転 / 列車遅延 / …
+      更新：11月28日 9時52分更新
+      原因：……（有事故时才有）
     """
-    groups = {}
+    groups: dict[tuple, list] = {}
     for r in results:
         key = (r["status"] or "", r["reason"] or "")
         groups.setdefault(key, []).append(r)
@@ -182,8 +178,9 @@ def build_grouped_message(results):
         names = " / ".join(i["name"] for i in items)
         updated = items[0]["updated"]
 
+        # ✅ 这里直接把标题写在“路線：……”这一行里
         lines = [
-            f"",
+            f"路線：{names}",
             f"状態：{status}",
             f"更新：{updated}",
         ]
@@ -227,10 +224,8 @@ def main():
 
     title = "常磐線運行情報"
     icon = choose_icon(has_abnormal, has_severe)
-
     send_bark(title, body, icon)
 
 
 if __name__ == "__main__":
     main()
-
